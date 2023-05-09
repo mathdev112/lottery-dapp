@@ -12,25 +12,6 @@ import "hardhat/console.sol";
 contract Lottery is Ownable {
     using Math for uint256;
 
-    // State Variables
-    struct LotteryStruct {
-        uint256 lotteryId;
-        uint256 startTime;
-        uint256 endTime;
-        bool isActive; // minting tickets is allowed. TASK: rename to "isMintingPeriodActive"?
-        bool isCompleted; // winner was found; winnings were deposited.
-        bool isCreated; // is created
-    }
-    struct TicketDistributionStruct {
-        address playerAddress;
-        uint256 startIndex; // inclusive
-        uint256 endIndex; // inclusive
-    }
-    struct WinningTicketStruct {
-        uint256 currentLotteryId;
-        uint256 winningTicketIndex;
-        address addr; // TASK: rename to "winningAddress"?
-    }
     /* TASK: rename to TICKET_PRICE? More human readable, makes more sense. Although it technically is the minimum increment.
      */
     uint256 public constant MIN_DRAWING_INCREMENT = 100000000000000; // 0.0001 ETH; min eth amount to enter lottery.
@@ -45,12 +26,34 @@ contract Lottery is Ownable {
     uint256 public numLotteries = 0;
     uint256 public prizeAmount; // winnings. Probably duplicate and can be removed. Just use numTotalTickets/ (MIN_DRAWING_INCREMENT) to calculate prize amount
 
+    uint256 public numActivePlayers;
+    uint256 public numTotalTickets;
+
+    // State Variables
+    struct LotteryStruct {
+        uint256 lotteryId;
+        uint256 startTime;
+        uint256 endTime;
+        bool isActive; // minting tickets is allowed. TASK: rename to "isMintingPeriodActive"?
+        bool isCompleted; // winner was found; winnings were deposited.
+        bool isCreated; // is created
+    }
+
+    struct TicketDistributionStruct {
+        address playerAddress;
+        uint256 startIndex; // inclusive
+        uint256 endIndex; // inclusive
+    }
+
+    struct WinningTicketStruct {
+        uint256 currentLotteryId;
+        uint256 winningTicketIndex;
+        address addr; // TASK: rename to "winningAddress"?
+    }
+
     WinningTicketStruct public winningTicket;
     TicketDistributionStruct[] public ticketDistribution;
     address[] public listOfPlayers; // won't be deleted; sucessive lotteries overwrite indices. Don't rely on this for current participants list
-
-    uint256 public numActivePlayers;
-    uint256 public numTotalTickets;
 
     mapping(uint256 => uint256) public prizes; // key is lotteryId
     mapping(uint256 => WinningTicketStruct) public winningTickets; // key is lotteryId
@@ -60,26 +63,38 @@ contract Lottery is Ownable {
     mapping(uint256 => mapping(address => uint256)) public pendingWithdrawals; // pending withdrawals for each winner, key is lotteryId, then player address
     // withdrawal design pattern
 
-    // Events
-    event LogNewLottery(address creator, uint256 startTime, uint256 endTime); // emit when lottery created
-    event LogTicketsMinted(address player, uint256 numTicketsMinted); // emit when user purchases tix
+
+    // ========================================
+    // EVENTS
+    // ========================================
+
+
+    // emit when lottery created
+    event LogNewLottery(address creator, uint256 startTime, uint256 endTime);
+
+    // emit when user purchases tix
+    event LogTicketsMinted(address player, uint256 numTicketsMinted);
+
     // emit when lottery drawing happens; winner found
     event LogWinnerFound(
         uint256 lotteryId,
         uint256 winningTicketIndex,
         address winningAddress
     );
+
     // emit when lottery winnings deposited in pending withdrawals
     event LotteryWinningsDeposited(
         uint256 lotteryId,
         address winningAddress,
         uint256 amountDeposited
     );
+
     // emit when funds withdrawn by winner
     event LogWinnerFundsWithdrawn(
         address winnerAddress,
         uint256 withdrawalAmount
     );
+
     // emit when owner has changed max player param
     event LogMaxPlayersAllowedUpdated(uint256 maxPlayersAllowed);
 
@@ -92,11 +107,16 @@ contract Lottery is Ownable {
     error Lottery__InvalidWithdrawalAmount();
     error Lottery__WithdrawalFailed();
 
-    // modifiers
-    /* @dev check that new lottery is a valid implementation
-    previous lottery must be inactive for new lottery to be saved
-    for when new lottery will be saved
-    */
+
+    // ========================================
+    // MODIFIERS
+    // ========================================
+
+
+    /**
+     *
+     * @dev check that new lottery is a valid implementation previous lottery must be inactive for new lottery to be saved for when new lottery will be saved
+     */
     modifier isNewLotteryValid() {
         // active lottery
         LotteryStruct memory lottery = lotteries[currentLotteryId];
@@ -106,11 +126,11 @@ contract Lottery is Ownable {
         _;
     }
 
-    /* @dev check that minting period is completed, and lottery drawing can begin
-    either:
-    1) minting period manually ended, ie lottery is inactive. Then drawing can begin immediately.
-    2) lottery minting period has ended organically, and lottery is still active at that point
-    */
+    /**
+     * @dev check that minting period is completed, and lottery drawing can begin either:
+     * 1) minting period manually ended, ie lottery is inactive. Then drawing can begin immediately.
+     * 2) lottery minting period has ended organically, and lottery is still active at that point
+     */
     modifier isLotteryMintingCompleted() {
         if (
             !((lotteries[currentLotteryId].isActive == true &&
@@ -121,7 +141,9 @@ contract Lottery is Ownable {
         }
         _;
     }
-    /* check that new player has enough eth to buy at least 1 ticket
+
+    /**
+     * @dev Check that new player has enough eth to buy at least 1 ticket
      */
     modifier isNewPlayerValid() {
         if (msg.value.min(MIN_DRAWING_INCREMENT) < MIN_DRAWING_INCREMENT) {
@@ -130,109 +152,41 @@ contract Lottery is Ownable {
         _;
     }
 
-    /*
-     * @title setMaxPlayersAllowed
-     * @dev A function for owner to update max players allowed criteria
-     * @param uint256 _maxPlayersAllowed new max players value to set
-     */
-    function setMaxPlayersAllowed(uint256 maxPlayersAllowed_)
-        external
-        onlyOwner
-    {
+
+    // ========================================
+    // OWNABLE
+    // ========================================
+
+
+    /// @notice setMaxPlayersAllowed
+    /// @dev A function for owner to update max players allowed criteria
+    /// @param maxPlayersAllowed_ maxPlayersAllowed_ new max players value to set
+    function setMaxPlayersAllowed(uint256 maxPlayersAllowed_) external onlyOwner {
         maxPlayersAllowed = maxPlayersAllowed_;
+
         emit LogMaxPlayersAllowedUpdated(maxPlayersAllowed);
     }
 
-    // functions
-
-    /*
-     * @title setLotteryInactive
-     * @dev A function for owner to force update lottery status isActive to false
-     * public because it needs to be called internally when a Lottery is cancelled
-     * TASK: probably should rename this to something like "closeMintingPeriod".
-     */
+    /// @notice setLotteryInactive
+    /// @dev A function for owner to force update lottery status isActive to false
+    /// public because it needs to be called internally when a Lottery is cancelled
+    /// TASK: probably should rename this to something like "closeMintingPeriod".
     function setLotteryInactive() public onlyOwner {
         lotteries[currentLotteryId].isActive = false;
     }
 
-    /*
-     * @title cancelLottery
-     * @dev A function for owner to force update lottery to be cancelled
-     * funds should be returned to players too
-     */
+    /// @notice cancelLottery
+    /// @dev A function for owner to force update lottery to be cancelled
+    /// funds should be returned to players too
     function cancelLottery() external onlyOwner {
         setLotteryInactive();
         _resetLottery();
         // TASK: implement refund funds to users
     }
 
-    /*
-     * @title initLottery
-     * @dev A function to initialize a lottery
-     * probably should also be onlyOwner
-     * @param uint256 startTime_: start of minting period, unixtime
-     * @param uint256 numHours: in hours, how long mint period will last
-     */
-    function initLottery(uint256 startTime_, uint256 numHours_)
-        external
-        isNewLotteryValid
-    // TASK: add onlyOwner and re-test
-    {
-        // basically default value
-        // if set to 0, default to explicit default number of days
-        if (numHours_ == 0) {
-            numHours_ = NUMBER_OF_HOURS;
-        }
-        uint256 endTime = startTime_ + (numHours_ * 1 hours);
-        lotteries[currentLotteryId] = LotteryStruct({
-            lotteryId: currentLotteryId,
-            startTime: startTime_,
-            endTime: endTime,
-            isActive: true,
-            isCompleted: false,
-            isCreated: true
-        });
-        numLotteries = numLotteries + 1;
-        emit LogNewLottery(msg.sender, startTime_, endTime);
-    }
-
-    /*
-     * @title mintLotteryTickets
-     * @dev a function for players to mint lottery tix
-     */
-    function mintLotteryTickets() external payable isNewPlayerValid {
-        uint256 _numTicketsToMint = msg.value / (MIN_DRAWING_INCREMENT);
-        require(_numTicketsToMint >= 1); // double check that user put in at least enough for 1 ticket
-        // if player is "new" for current lottery, update the player lists
-
-        // memory var to conserve gas
-        uint _numActivePlayers = numActivePlayers;
-
-        if (players[msg.sender] == false) {
-            require(_numActivePlayers + 1 <= maxPlayersAllowed); // capped max # of players
-            if (listOfPlayers.length > _numActivePlayers) {
-                listOfPlayers[_numActivePlayers] = msg.sender; // set based on index for when lottery is reset - overwrite array instead of delete to save gas
-            } else {
-                listOfPlayers.push(msg.sender); // otherwise append to array
-            }
-            players[msg.sender] = true;
-            numActivePlayers = _numActivePlayers + 1;
-        }
-        tickets[msg.sender] = tickets[msg.sender] + _numTicketsToMint; // account for if user has already minted tix previously for this current lottery
-        prizeAmount = prizeAmount + (msg.value); // update the pot size
-        numTotalTickets = numTotalTickets + _numTicketsToMint; // update the total # of tickets minted
-        emit LogTicketsMinted(msg.sender, _numTicketsToMint);
-    }
-
-    /*
-     * @title triggerLotteryDrawing
-     * @dev a function for owner to trigger lottery drawing
-     */
-    function triggerLotteryDrawing()
-        external
-        isLotteryMintingCompleted
-        onlyOwner
-    {
+    /// @notice triggerLotteryDrawing
+    /// @dev a function for owner to trigger lottery drawing
+    function triggerLotteryDrawing() external isLotteryMintingCompleted onlyOwner {
         // console.log("triggerLotteryDrawing");
         prizes[currentLotteryId] = prizeAmount; // keep track of prize amts for each of the previous lotteries
 
@@ -251,17 +205,73 @@ contract Lottery is Ownable {
         );
     }
 
-    /*
-     * @title triggerDepositWinnings // TASK: rename to maybe depositWinnings
-     * @dev function to deposit winnings for user withdrawal pattern
-     * then reset lottery params for new one to be created
-     */
+    /// @notice initLottery
+    /// @dev  A function to initialize a lottery, probably should also be onlyOwner
+    /// @param startTime_ start of minting period, unixtime
+    /// @param numHours_ in hours, how long mint period will last
+    // TASK: add onlyOwner and re-test
+    function initLottery(uint256 startTime_, uint256 numHours_) external isNewLotteryValid {
+        // basically default value
+        // if set to 0, default to explicit default number of days
+        if (numHours_ == 0) {
+            numHours_ = NUMBER_OF_HOURS;
+        }
+        uint256 endTime = startTime_ + (numHours_ * 1 hours);
+        lotteries[currentLotteryId] = LotteryStruct({
+            lotteryId: currentLotteryId,
+            startTime: startTime_,
+            endTime: endTime,
+            isActive: true,
+            isCompleted: false,
+            isCreated: true
+        });
+        numLotteries = numLotteries + 1;
+        emit LogNewLottery(msg.sender, startTime_, endTime);
+    }
+
+    // ========================================
+    // PUBLIC
+    // ========================================
+
+
+    /// @notice mintLotteryTickets
+    /// @dev a function for players to mint lottery tix
+    function mintLotteryTickets() external payable isNewPlayerValid {
+        uint256 _numTicketsToMint = msg.value / (MIN_DRAWING_INCREMENT);
+        require(_numTicketsToMint >= 1); // double check that user put in at least enough for 1 ticket
+        // if player is "new" for current lottery, update the player lists
+
+        uint256 _numActivePlayers = numActivePlayers; // memory var to conserve gas
+
+        if (players[msg.sender] == false) {
+            require(_numActivePlayers + 1 <= maxPlayersAllowed); // capped max # of players
+
+            if (listOfPlayers.length > _numActivePlayers) {
+                listOfPlayers[_numActivePlayers] = msg.sender; // set based on index for when lottery is reset - overwrite array instead of delete to save gas
+            } else {
+                listOfPlayers.push(msg.sender); // otherwise append to array
+            }
+
+            players[msg.sender] = true;
+            numActivePlayers = _numActivePlayers + 1;
+        }
+
+        tickets[msg.sender] = tickets[msg.sender] + _numTicketsToMint; // account for if user has already minted tix previously for this current lottery
+        prizeAmount = prizeAmount + (msg.value); // update the pot size
+        numTotalTickets = numTotalTickets + _numTicketsToMint; // update the total # of tickets minted
+
+        emit LogTicketsMinted(msg.sender, _numTicketsToMint);
+    }
+
+    /// @notice triggerDepositWinnings
+    /// @dev function to deposit winnings for user withdrawal pattern then reset lottery params for new one to be created
     function triggerDepositWinnings() public {
         // console.log("triggerDepositWinnings");
         pendingWithdrawals[currentLotteryId][winningTicket.addr] = prizeAmount;
         prizeAmount = 0;
         lotteries[currentLotteryId].isCompleted = true;
         winningTickets[currentLotteryId] = winningTicket;
+
         // emit before resetting lottery so vars still valid
         emit LotteryWinningsDeposited(
             currentLotteryId,
@@ -271,10 +281,8 @@ contract Lottery is Ownable {
         _resetLottery();
     }
 
-    /*
-     * @title getTicketDistribution
-     * @dev getter function for ticketDistribution bc its a struct
-     */
+    /// @notice getTicketDistribution
+    /// @dev getter function for ticketDistribution bc its a struct
     function getTicketDistribution(uint256 playerIndex_)
         public
         view
@@ -291,16 +299,67 @@ contract Lottery is Ownable {
         );
     }
 
-    /*
-     * @title _playerTicketDistribution
-     * @dev function to handle creating the ticket distribution
-     * if 1) player1 buys 10 tix, then 2) player2 buys 5 tix, and then 3) player1 buys 5 more
-     * player1's ticket indices will be 0-14; player2's from 15-19
-     * this is why ticketDistribution cannot be determined until minting period is closed
-     */
+    /// @notice findWinningAddress
+    /// @dev function to find winning player address corresponding to winning ticket index calls binary search
+    /// @param winningTicketIndex_: ticket index selected as winner.
+    /// Search for this within the ticket distribution to find corresponding Player
+    function findWinningAddress(uint256 winningTicketIndex_) public {
+        // console.log("findWinningAddress");
+        // trivial case, no search required
+        uint256 _numActivePlayers = numActivePlayers;
+        if (_numActivePlayers == 1) {
+            winningTicket.addr = ticketDistribution[0].playerAddress;
+        } else {
+            // do binary search on ticketDistribution array to find winner
+            uint256 _winningPlayerIndex = _binarySearch(
+                0,
+                _numActivePlayers - 1,
+                winningTicketIndex_
+            );
+            if (_winningPlayerIndex >= _numActivePlayers) {
+                // sanity check
+                revert Lottery__InvalidWinningIndex();
+            }
+            winningTicket.addr = ticketDistribution[_winningPlayerIndex]
+                .playerAddress;
+        }
+    }
+
+    /// @notice withdraw
+    /// @dev function to allow winner to withdraw prize, implement withdrawal pattern
+    /// @param  lotteryId_ to minimize the search requirement
+    function withdraw(uint256 lotteryId_) external payable {
+        // console.log("withdraw");
+        uint256 _pendingCurrentUserWithdrawal = pendingWithdrawals[lotteryId_][
+            msg.sender
+        ];
+        if (_pendingCurrentUserWithdrawal == 0) {
+            revert Lottery__InvalidWithdrawalAmount();
+        }
+        pendingWithdrawals[lotteryId_][msg.sender] = 0; // zero out pendingWithdrawals before transfer, to prevent attacks
+        (bool sent, ) = msg.sender.call{value: _pendingCurrentUserWithdrawal}(
+            ""
+        );
+        if (sent == false) {
+            revert Lottery__WithdrawalFailed();
+        }
+        emit LogWinnerFundsWithdrawn(msg.sender, _pendingCurrentUserWithdrawal);
+    }
+
+
+    // ========================================
+    // PRIVATE
+    // ========================================
+
+
+    /// @notice _playerTicketDistribution
+    /// @dev function to handle creating the ticket distribution
+    /// if 1) player1 buys 10 tix, then 2) player2 buys 5 tix, and then 3) player1 buys 5 more
+    /// player1's ticket indices will be 0-14; player2's from 15-19
+    /// this is why ticketDistribution cannot be determined until minting period is closed
     function _playerTicketDistribution() private {
         // console.log("_playerTicketDistribution");
-        uint _ticketDistributionLength = ticketDistribution.length; // so state var doesn't need to be invoked each iteration of loop
+        uint256 _ticketDistributionLength = ticketDistribution.length; // so state var doesn't need to be invoked each iteration of loop
         uint256 _ticketIndex = 0; // counter within loop
         for (uint256 i = _ticketIndex; i < numActivePlayers; i++) {
             address _playerAddress = listOfPlayers[i];
@@ -323,11 +382,9 @@ contract Lottery is Ownable {
         }
     }
 
-    /*
-     * @title _performRandomizedDrawing
-     * @dev function to generate random winning ticket index. Still need to find corresponding user afterwards.
-     * v0.1 isn't randomized (for testing)
-     */
+    /// @notice _performRandomizedDrawing
+    /// @dev function to generate random winning ticket index. Still need to find corresponding user afterwards.
+    /// v0.1 isn't randomized (for testing)
     function _performRandomizedDrawing() private view returns (uint256) {
         // console.log("_performRandomizedDrawing");
         /* TASK: implement random drawing from 0 to numTotalTickets-1
@@ -336,50 +393,19 @@ contract Lottery is Ownable {
         return Random.naiveRandInt(0, numTotalTickets - 1);
     }
 
-    /*
-     * @title findWinningAddress
-     * @dev function to find winning player address corresponding to winning ticket index
-     * calls binary search
-     * @param uint256 winningTicketIndex_: ticket index selected as winner.
-     * Search for this within the ticket distribution to find corresponding Player
-     */
-    function findWinningAddress(uint256 winningTicketIndex_) public {
-        // console.log("findWinningAddress");
-        // trivial case, no search required
-        uint _numActivePlayers = numActivePlayers;
-        if (_numActivePlayers == 1) {
-            winningTicket.addr = ticketDistribution[0].playerAddress;
-        } else {
-            // do binary search on ticketDistribution array to find winner
-            uint256 _winningPlayerIndex = _binarySearch(
-                0,
-                _numActivePlayers - 1,
-                winningTicketIndex_
-            );
-            if (_winningPlayerIndex >= _numActivePlayers) {
-                // sanity check
-                revert Lottery__InvalidWinningIndex();
-            }
-            winningTicket.addr = ticketDistribution[_winningPlayerIndex]
-                .playerAddress;
-        }
-    }
-
-    /*
-     * @title _binarySearch
-     * @dev function implementing binary search on ticket distribution var
-     * recursive function
-     * @param uint256 leftIndex_ initially 0
-     * @param uint256 rightIndex_ initially max ind, ie array.length - 1
-     * @param uint256 ticketIndexToFind_ to search for
-     */
+    /// @notice _binarySearch
+    /// @dev function implementing binary search on ticket distribution var recursive function
+    /// @param leftIndex_ initially 0
+    /// @param rightIndex_ initially max ind, ie array.length - 1
+    /// @param ticketIndexToFind_ to search for
     function _binarySearch(
         uint256 leftIndex_,
         uint256 rightIndex_,
         uint256 ticketIndexToFind_
     ) private returns (uint256) {
         uint256 _searchIndex = (rightIndex_ - leftIndex_) / (2) + (leftIndex_);
-        uint _loopCount = loopCount;
+        uint256 _loopCount = loopCount;
+
         // counter
         loopCount = _loopCount + 1;
         if (_loopCount + 1 > maxLoops) {
@@ -412,11 +438,8 @@ contract Lottery is Ownable {
         return numActivePlayers;
     }
 
-    /*
-     * @title _resetLottery
-     * @dev function to reset lottery by setting state vars to defaults
-     * don't delete if possible, as it requires lots of gas
-     */
+    /// @notice _resetLottery
+    /// @dev function to reset lottery by setting state vars to defaults don't delete if possible, as it requires lots of gas
     function _resetLottery() private {
         // console.log("_resetLottery");
 
@@ -431,29 +454,5 @@ contract Lottery is Ownable {
         });
 
         currentLotteryId = currentLotteryId + (1); // increment id counter
-    }
-
-    /*
-     * @title withdraw
-     * @dev function to allow winner to withdraw prize
-     * implement withdrawal pattern
-     * @param uint256 lotteryId_ to minimize the search requirement
-     */
-    function withdraw(uint256 lotteryId_) external payable {
-        // console.log("withdraw");
-        uint256 _pendingCurrentUserWithdrawal = pendingWithdrawals[lotteryId_][
-            msg.sender
-        ];
-        if (_pendingCurrentUserWithdrawal == 0) {
-            revert Lottery__InvalidWithdrawalAmount();
-        }
-        pendingWithdrawals[lotteryId_][msg.sender] = 0; // zero out pendingWithdrawals before transfer, to prevent attacks
-        (bool sent, ) = msg.sender.call{value: _pendingCurrentUserWithdrawal}(
-            ""
-        );
-        if (sent == false) {
-            revert Lottery__WithdrawalFailed();
-        }
-        emit LogWinnerFundsWithdrawn(msg.sender, _pendingCurrentUserWithdrawal);
     }
 }
